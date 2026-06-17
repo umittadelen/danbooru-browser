@@ -1,385 +1,521 @@
 <!DOCTYPE html>
-<html>
-<head>
-<title>Danbooru Browser</title>
-<link rel="icon" href="https://danbooru.donmai.us/favicon.ico">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<style>
-*, *::before, *::after { box-sizing: border-box; }
-
-body {
-    background: #0e0e0e;
-    color: #ddd;
-    font-family: system-ui, sans-serif;
-    margin: 0;
-}
-
-header {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: #161616;
-    border-bottom: 1px solid #2a2a2a;
-    padding: 10px 14px;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-input {
-    background: #222;
-    border: 1px solid #333;
-    color: #eee;
-    padding: 7px 10px;
-    border-radius: 4px;
-    font-size: 13px;
-    outline: none;
-    width: 280px;
-}
-
-input:focus { border-color: #555; }
-
-button {
-    background: #2a2a2a;
-    border: 1px solid #444;
-    color: #eee;
-    padding: 7px 16px;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-}
-
-button:hover { background: #333; }
-
-#restricted-note {
-    font-size: 12px;
-    color: #666;
-    margin-left: 4px;
-}
-
-.item {
-    break-inside: avoid;
-    margin-bottom: 8px;
-    background: #1a1a1a;
-    border-radius: 5px;
-    overflow: hidden;
-    display: block;
-    cursor: pointer;
-}
-
-.item img, .item video {
-    width: 100%;
-    display: block;
-}
-
-#suggestions {
-    position: fixed;
-    background: #1e1e1e;
-    border: 1px solid #383838;
-    border-radius: 4px;
-    display: none;
-    z-index: 9999;
-    box-shadow: 0 4px 12px rgba(0,0,0,.5);
-    overflow: hidden;
-}
-
-.sugg-item {
-    padding: 7px 10px;
-    cursor: pointer;
-    font-size: 13px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.sugg-item:hover { background: #2a2a2a; }
-
-#sentinel { height: 1px; }
-</style>
-</head>
-<body>
-
-<header>
-    <input id="tags"      placeholder="tags (comma or space separated)">
-    <input id="blacklist" placeholder="blacklist tags"
-           value="rating:explicit,rating:questionable,rating:sensitive">
-    <button onclick="startSearch()">Search</button>
-    <span id="restricted-note"></span>
-</header>
-
-<div id="suggestions"></div>
-<div class="masonry" id="grid"></div>
-<div id="sentinel"></div>
-
-<script>
-const API      = "https://danbooru.donmai.us";
-const HEADERS  = { "User-Agent": "PinterestBooru/1.0" };
-const RATING_MAP = { explicit: "e", questionable: "q", sensitive: "s", general: "g" };
-
-let page = null, loading = 0, done = false;
-let activeInput  = null;
-let suggestTimer = null;
-let totalRestricted = 0;
-let cols = [];
-let lastColCount = 0;
-let resizeTimer = null;
-
-const tagsEl  = document.getElementById("tags");
-const blackEl = document.getElementById("blacklist");
-const box     = document.getElementById("suggestions");
-const note    = document.getElementById("restricted-note");
-
-tagsEl.addEventListener("focus",  () => activeInput = tagsEl);
-blackEl.addEventListener("focus", () => activeInput = blackEl);
-tagsEl.addEventListener("keydown",  e => { if (e.key === "Enter") startSearch(); });
-blackEl.addEventListener("keydown", e => { if (e.key === "Enter") startSearch(); });
-tagsEl.addEventListener("input",  e => debouncedSuggest(e.target));
-blackEl.addEventListener("input", e => debouncedSuggest(e.target));
-
-function parseTags(text) {
-    return text.trim().split(/[\s,]+/).filter(Boolean);
-}
-
-function debouncedSuggest(input) {
-    clearTimeout(suggestTimer);
-    suggestTimer = setTimeout(() => suggest(input), 180);
-}
-
-function shortestCol() {
-    return cols.reduce((a, b) => a.h < b.h ? a : b);
-}
-
-function initGrid() {
-    const grid = document.getElementById("grid");
-    const items = cols.flatMap(c => Array.from(c.el.children));
-    const heights = items.map(item => {
-        const wrap = item.querySelector("div");
-        return parseFloat(wrap.style.paddingBottom) / 100 || 1;
-    });
-
-    grid.innerHTML = "";
-    const n = Math.max(2, Math.floor(grid.clientWidth / 200));
-    lastColCount = n;
-    cols = Array.from({ length: n }, () => {
-        const col = document.createElement("div");
-        col.style.cssText = "flex:1; display:flex; flex-direction:column; gap:8px;";
-        grid.appendChild(col);
-        return { el: col, h: 0 };
-    });
-
-    for (let i = 0; i < items.length; i++) {
-        const col = shortestCol();
-        col.h += heights[i];
-        col.el.appendChild(items[i]);
-    }
-}
-
-new ResizeObserver(() => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-        const n = Math.max(2, Math.floor(document.getElementById("grid").clientWidth / 200));
-        if (n === lastColCount) return;
-        lastColCount = n;
-        if (cols.length) initGrid();
-    }, 150);
-}).observe(document.querySelector("header"));
-
-function startSearch() {
-    page = null; done = false;
-    totalRestricted = 0;
-    note.textContent = "";
-    box.style.display = "none";
-
-    cols = [];
-    lastColCount = 0;
-    const grid = document.getElementById("grid");
-    grid.innerHTML = "";
-    grid.style.cssText = "display:flex; gap:8px; padding:10px; align-items:start;";
-
-    loadMore();
-}
-
-async function fetchPosts(rawTags, rawBlacklist, page) {
-    const tags     = parseTags(rawTags);
-    const blacklist = new Set(parseTags(rawBlacklist));
-
-    if (!tags.length) return { results: [], restricted: 0 };
-
-    const ratingTags = tags.filter(t => t.startsWith("rating:"));
-    const normalTags = tags.filter(t => !t.startsWith("rating:"));
-
-    const apiTags = [...normalTags.slice(0, 2), ...ratingTags];
-    const extra   = new Set(normalTags.slice(2));
-
-    const blacklistRatings = new Set(
-        [...blacklist]
-            .filter(t => t.startsWith("rating:") && RATING_MAP[t.slice(7)])
-            .map(t => RATING_MAP[t.slice(7)])
-    );
-    const blacklistTags = new Set([...blacklist].filter(t => !t.startsWith("rating:")));
-
-    const params = new URLSearchParams({ tags: apiTags.join(" "), limit: 200 });
-    if (page) params.set("page", `b${page}`);
-
-    const res = await fetch(`${API}/posts.json?${params}`, { headers: HEADERS });
-    if (!res.ok) return { results: [], restricted: 0 };
-
-    const posts = await res.json();
-    const results = [];
-    let restricted = 0;
-
-    for (const post of posts) {
-        if (!post.file_url) { restricted++; continue; }
-        if (blacklistRatings.has(post.rating)) continue;
-
-        const postTags = new Set(post.tag_string.split(" "));
-        if (blacklistTags.size && [...blacklistTags].some(t => postTags.has(t))) continue;
-        if (extra.size && ![...extra].every(t => postTags.has(t))) continue;
-
-        const ext = post.file_url.rsplit ? post.file_url.rsplit(".", 1)[1] : post.file_url.split(".").pop().toLowerCase();
-        const isMedia = ["mp4", "webm", "zip"].includes(ext);
-        const preview = isMedia
-            ? (post.preview_file_url || post.file_url)
-            : (post.large_file_url  || post.file_url);
-
-        if (!preview) continue;
-
-        results.push({
-            id:      post.id,
-            url:     post.file_url,
-            preview,
-            w: post.image_width  || 1,
-            h: post.image_height || 1,
-        });
-    }
-
-    return { results, restricted };
-}
-
-async function loadMore() {
-    const tags = tagsEl.value.trim();
-    if (loading >= 2 || done || !tags) return;
-    loading++;
-
-    if (!cols.length) {
-        const grid = document.getElementById("grid");
-        const n = Math.max(2, Math.floor(grid.clientWidth / 200));
-        lastColCount = n;
-        cols = Array.from({ length: n }, () => {
-            const col = document.createElement("div");
-            col.style.cssText = "flex:1; display:flex; flex-direction:column; gap:8px;";
-            grid.appendChild(col);
-            return { el: col, h: 0 };
-        });
-    }
-
-    const { results, restricted } = await fetchPosts(tagsEl.value, blackEl.value, page);
-
-    if (!results.length) { done = true; loading--; return; }
-
-    totalRestricted += restricted;
-    if (totalRestricted > 0)
-        note.textContent = `${totalRestricted} hidden (login required)`;
-
-    page = results[results.length - 1].id;
-    loading--;
-
-    loadMore();
-
-    for (const p of results) {
-        if (!p.preview) continue;
-
-        const a = document.createElement("a");
-        a.className = "item";
-        a.href      = p.url;
-        a.target    = "_blank";
-
-        const wrap = document.createElement("div");
-        wrap.style.cssText = `position:relative; width:100%; padding-bottom:${(p.h / p.w * 100).toFixed(2)}%; overflow:hidden;`;
-
-        const isVideo = /\.(mp4|webm)$/i.test(p.preview);
-
-        if (isVideo) {
-            const vid = document.createElement("video");
-            vid.src         = p.preview;
-            vid.muted       = true;
-            vid.loop        = true;
-            vid.playsInline = true;
-            vid.preload     = "metadata";
-            vid.style.cssText = "position:absolute; inset:0; width:100%; height:100%; object-fit:cover;";
-            vid.addEventListener("mouseenter", () => vid.play());
-            vid.addEventListener("mouseleave", () => { vid.pause(); vid.currentTime = 0; });
-            wrap.appendChild(vid);
-        } else {
-            const img = document.createElement("img");
-            img.src     = p.preview;
-            img.loading = "eager";
-            img.style.cssText = "position:absolute; inset:0; width:100%; height:100%; object-fit:cover;";
-            wrap.appendChild(img);
-        }
-
-        a.appendChild(wrap);
-
-        const col = shortestCol();
-        col.h += p.h / p.w;
-        col.el.appendChild(a);
-    }
-}
-
-new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) loadMore();
-}, { rootMargin: "600px" }).observe(document.getElementById("sentinel"));
-
-async function suggest(input) {
-    const raw  = input.value;
-    const last = raw.split(/[\s,]+/).pop().trim();
-
-    if (!last || last.startsWith("rating:")) {
-        box.style.display = "none";
-        return;
-    }
-
-    const params = new URLSearchParams({
-        "search[name_matches]": `${last}*`,
-        "search[order]":        "count",
-        limit:                  8,
-    });
-
-    const res  = await fetch(`${API}/tags.json?${params}`, { headers: HEADERS });
-    if (!res.ok) { box.style.display = "none"; return; }
-    const data = await res.json();
-
-    if (!data.length) { box.style.display = "none"; return; }
-
-    const rect = input.getBoundingClientRect();
-    box.style.top     = (rect.bottom + 4) + "px";
-    box.style.left    = rect.left + "px";
-    box.style.width   = rect.width + "px";
-    box.style.display = "block";
-    box.innerHTML     = "";
-
-    for (const t of data) {
-        const div = document.createElement("div");
-        div.className   = "sugg-item";
-        div.textContent = t.name;
-        div.addEventListener("mousedown", e => {
-            e.preventDefault();
-            const parts = raw.split(/(\s+|,\s*)/).filter(Boolean);
-            if (parts.length) parts[parts.length - 1] = t.name;
-            else parts.push(t.name);
-            input.value = parts.join(" ") + " ";
-            box.style.display = "none";
-            input.focus();
-        });
-        box.appendChild(div);
-    }
-}
-
-document.addEventListener("click", e => {
-    if (!box.contains(e.target)) box.style.display = "none";
-});
-</script>
-
-</body>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Danbooru Browser</title>
+        <link rel="icon" href="https://danbooru.donmai.us/favicon.ico">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="styles.css">
+    </head>
+    <body>
+        <header>
+            <input id="tags" placeholder="tags (comma or space separated)" autocomplete="off" autocapitalize="none">
+            <input id="blacklist" placeholder="blacklist tags" autocomplete="off" autocapitalize="none"
+                value="rating:explicit rating:questionable rating:sensitive">
+            <span id="status-note"></span>
+            <button id="search-btn">Search</button>
+        </header>
+
+        <div id="suggestions"></div>
+        <div id="grid"></div>
+
+        <div id="spinner">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2.5" stroke-linecap="round">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+            </svg>
+        </div>
+
+        <div id="sentinel"></div>
+
+        <script>
+            const API = "https://danbooru.donmai.us";
+
+            const RATING_ABBREV = { explicit: "e", questionable: "q", sensitive: "s", general: "g" };
+
+            // ── State ──
+            let cursorId    = null;   // id of last fetched post (used for pagination)
+            let canFetch = true;
+            let exhausted   = false;  // no more pages
+            let totalHidden = 0;
+
+            // ── Column layout state ──
+            let cols        = [];
+            let colCount    = 0;
+
+            // ── DOM refs ──
+            const tagsEl    = document.getElementById("tags");
+            const blackEl   = document.getElementById("blacklist");
+            const suggestEl = document.getElementById("suggestions");
+            const gridEl    = document.getElementById("grid");
+            const spinnerEl = document.getElementById("spinner");
+            const noteEl    = document.getElementById("status-note");
+
+            // ── Search triggers ──
+            document.getElementById("search-btn").addEventListener("click", startSearch);
+            tagsEl.addEventListener("keydown",  e => { if (e.key === "Enter") { startSearch(); tagsEl.blur(); } });
+            blackEl.addEventListener("keydown", e => { if (e.key === "Enter") { startSearch(); blackEl.blur(); } });
+
+            // ── Autocomplete triggers ──
+            let suggestTimer = null;
+
+            tagsEl.addEventListener("input",  () => scheduleSuggest(tagsEl));
+            blackEl.addEventListener("input", () => scheduleSuggest(blackEl));
+
+            document.addEventListener("click", e => {
+                if (!suggestEl.contains(e.target) && e.target !== tagsEl && e.target !== blackEl)
+                    suggestEl.style.display = "none";
+            });
+
+            // ── Infinite scroll ──
+            const observer = new IntersectionObserver(entries => {
+                if (entries[0].isIntersecting) {
+                    if (canFetch && !exhausted && tagsEl.value.trim()) {
+                        loadMore();
+                    }
+                }
+            }, {
+                rootMargin: "100% 0px"
+            });
+
+            observer.observe(document.getElementById("sentinel"));
+
+            // ── Grid resize ──
+            new ResizeObserver(() => {
+                clearTimeout(gridEl._resizeTimer);
+                gridEl._resizeTimer = setTimeout(() => {
+                    const n = targetColCount();
+                    if (n !== colCount) rebuildGrid();
+                }, 150);
+            }).observe(gridEl);
+
+            // ──────────────────────────────────────────────
+            // Grid helpers
+            // ──────────────────────────────────────────────
+
+            function targetColCount() {
+                return Math.max(2, Math.floor(gridEl.clientWidth / 200));
+            }
+
+            function shortestCol() {
+                return cols.reduce((a, b) => a.h < b.h ? a : b);
+            }
+
+            function buildCols(n) {
+                gridEl.innerHTML = "";
+                colCount = n;
+                cols = Array.from({ length: n }, () => {
+                    const el = document.createElement("div");
+                    el.className = "grid-col";
+                    gridEl.appendChild(el);
+                    return { el, h: 0 };
+                });
+            }
+
+            function rebuildGrid() {
+                // Collect all items and their aspect ratios before clearing
+                const items = cols.flatMap(c => Array.from(c.el.children));
+                const ratios = items.map(item => {
+                    const inner = item.querySelector(".item-inner");
+                    return parseFloat(inner.dataset.ratio) || 1;
+                });
+
+                buildCols(targetColCount());
+
+                for (let i = 0; i < items.length; i++) {
+                    const col = shortestCol();
+                    col.h += ratios[i];
+                    col.el.appendChild(items[i]);
+                }
+            }
+
+            // ──────────────────────────────────────────────
+            // Search / fetch
+            // ──────────────────────────────────────────────
+
+            function parseTags(text) {
+                return text.trim().split(/[\s,]+/).filter(Boolean);
+            }
+
+            function startSearch() {
+                window.scrollTo(0, 0);
+
+                saveSettings();
+
+                cursorId      = null;
+                exhausted     = false;
+                canFetch = true;
+                totalHidden   = 0;
+                noteEl.textContent = "";
+                suggestEl.style.display = "none";
+
+                buildCols(targetColCount());
+                loadMore();
+            }
+
+            async function loadMore() {
+                if (!canFetch || exhausted || !tagsEl.value.trim()) return;
+
+                canFetch = false;
+                spinnerEl.style.display = "flex";
+
+                try {
+                    const { posts, restricted } = await fetchPosts(tagsEl.value, blackEl.value, cursorId);
+
+                    if (!posts.length) {
+                        exhausted = true;
+                        noteEl.textContent = "No results.";
+                        return;
+                    }
+
+                    cursorId = posts[posts.length - 1].id;
+
+                    await appendPosts(posts);
+
+                    await new Promise(requestAnimationFrame);
+
+                    const rect = document.getElementById("sentinel").getBoundingClientRect();
+                    const triggerDistance = window.innerHeight * 2;
+
+                    if (rect.top < triggerDistance && !exhausted) {
+                        // We are still near the bottom, so fetch the next page immediately
+                        canFetch = true; 
+                        return loadMore(); 
+                    }
+
+                } catch (err) {
+                    noteEl.textContent = "Fetch failed. Check connection.";
+                    console.error(err);
+                } finally {
+                    canFetch = true;
+
+                    // delay hide so UI doesn't flicker
+                    setTimeout(() => {
+                        spinnerEl.style.display = "none";
+                    }, 50);
+                }
+
+                requestAnimationFrame(() => {
+                    const rect = document.getElementById("sentinel").getBoundingClientRect();
+                    if (rect.top < window.innerHeight) {
+                        loadMore();
+                    }
+                });
+            }
+
+            async function fetchPosts(rawTags, rawBlacklist, afterId) {
+                const tags      = parseTags(rawTags);
+                const blacklist = new Set(parseTags(rawBlacklist));
+
+                if (!tags.length) return { posts: [], restricted: 0 };
+
+                const ratingTags = tags.filter(t => t.startsWith("rating:"));
+                const normalTags = tags.filter(t => !t.startsWith("rating:"));
+
+                // Danbooru free-tier: max 2 non-rating tags in the API call
+                const apiTags  = [...normalTags.slice(0, 2), ...ratingTags];
+                const extraSet = new Set(normalTags.slice(2));
+
+                const blacklistRatings = new Set(
+                    [...blacklist]
+                        .filter(t => t.startsWith("rating:") && RATING_ABBREV[t.slice(7)])
+                        .map(t => RATING_ABBREV[t.slice(7)])
+                );
+                const blacklistTags = new Set([...blacklist].filter(t => !t.startsWith("rating:")));
+
+                const params = new URLSearchParams({ tags: apiTags.join(" "), limit: 200 });
+                if (afterId) params.set("page", `b${afterId}`);
+
+                const res = await fetch(`${API}/posts.json?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+                const raw = await res.json();
+                const posts = [];
+                let restricted = 0;
+
+                for (const post of raw) {
+                    if (!post.file_url) { restricted++; continue; }
+                    if (blacklistRatings.has(post.rating)) continue;
+
+                    const postTags = new Set(post.tag_string.split(" "));
+                    if (blacklistTags.size && [...blacklistTags].some(t => postTags.has(t))) continue;
+                    if (extraSet.size  && ![...extraSet].every(t => postTags.has(t))) continue;
+
+                    const ext = post.file_url.split(".").pop().toLowerCase();
+                    
+                    let mediaUrl = post.file_url;
+
+
+                    const clickUrl = `/viewer.html?src=${encodeURIComponent(mediaUrl)}&ext=${ext}`;
+
+                    const isVideo = ["mp4", "webm"].includes(ext);
+                    const isAnimated = ["mp4", "webm", "gif", "zip"].includes(ext);
+
+                    const preview = isAnimated
+                        ? (post.preview_file_url || post.file_url)
+                        : (post.large_file_url || post.file_url);
+                    
+                    const previewExt = preview.split(".").pop().toLowerCase();
+                    isPreviewAnimated = ["mp4", "webm", "gif"].includes(previewExt);
+
+                    posts.push({
+                        id: post.id,
+                        url: clickUrl,
+                        preview,
+                        isPreviewAnimated,
+                        w: post.image_width || 1,
+                        h: post.image_height || 1,
+                        isVideo,
+
+                        parentId: post.parent_id,
+                        hasChildren: post.has_children,
+                        isDeleted: post.is_deleted || post.status === "deleted",
+                        isPending: post.approval_status === "pending"
+                    });
+                }
+
+                return { posts, restricted };
+            }
+
+            // ──────────────────────────────────────────────
+            // DOM rendering
+            // ──────────────────────────────────────────────
+
+            function getPostType(p) {
+                const cls = [];
+
+                if (p.isDeleted) cls.push("deleted");
+                if (p.isFlagged) cls.push("flagged");
+                if (p.isPending) cls.push("pending");
+
+                if (p.hasChildren) cls.push("parent");
+                if (p.parentId) cls.push("child");
+
+                if (!cls.length) cls.push("normal");
+
+                return cls;
+            }
+
+            async function appendPosts(posts) {
+                if (!cols.length) buildCols(targetColCount());
+
+                for (let i = 0; i < posts.length; i++) {
+                    const p = posts[i];
+                    console.log(p)
+
+                    const ratio = p.h / p.w;
+
+                    const a = document.createElement("a");
+                    a.className = "item";
+                    a.href = p.url;
+                    a.target = "_blank";
+                    a.rel = "noopener";
+
+                    if (p.isVideo) a.classList.add("video");
+
+                    const classes = getPostType(p);
+                    a.classList.add(...classes);
+
+                    const inner = document.createElement("div");
+
+                    const spinner = document.createElement("div");
+                    spinner.className = "post-spinner";
+                    spinner.innerHTML = `
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                    </svg>
+                    `;
+                    inner.appendChild(spinner);
+
+                    inner.className = "item-inner";
+                    inner.style.paddingBottom = `${(ratio * 100).toFixed(2)}%`;
+                    inner.dataset.ratio = ratio;
+
+                    if (p.isPreviewAnimated) {
+                        const vid = document.createElement("video");
+                        vid.src = p.preview;
+                        vid.muted = true;
+                        vid.loop = true;
+                        vid.playsInline = true;
+                        vid.preload = "metadata";
+
+                        vid.addEventListener("loadeddata", () => spinner.remove());
+                        vid.addEventListener("error", () => spinner.remove());
+
+                        inner.appendChild(vid);
+                    } else {
+                        const img = document.createElement("img");
+                        img.src = p.preview;
+                        img.loading = "lazy";
+                        img.decoding = "async";
+                        img.alt = "";
+
+                        img.addEventListener("load", () => spinner.remove());
+                        img.addEventListener("error", () => spinner.remove());
+
+                        inner.appendChild(img);
+                    }
+
+                    a.appendChild(inner);
+
+                    const col = shortestCol();
+                    col.h += ratio;
+                    col.el.appendChild(a);
+
+                    if (i > 0 && i % 20 === 0) {
+                        await new Promise(r => requestAnimationFrame(r));
+                    }
+                }
+            }
+
+            // ──────────────────────────────────────────────
+            // Autocomplete
+            // ──────────────────────────────────────────────
+
+            function scheduleSuggest(input) {
+                clearTimeout(suggestTimer);
+                suggestTimer = setTimeout(() => suggest(input), 200);
+            }
+
+            const RATINGS = ["general", "sensitive", "questionable", "explicit"];
+
+            // Danbooru tag category ids -> CSS class (matches the site's own coloring)
+            const CATEGORY_CLASS = {
+                0: "tag-general",
+                1: "tag-artist",
+                3: "tag-copyright",
+                4: "tag-character",
+                5: "tag-meta",
+            };
+
+            function positionSuggestBox(input) {
+                const rect = input.getBoundingClientRect();
+                suggestEl.style.top     = `${rect.bottom + 4}px`;
+                suggestEl.style.left    = `${rect.left}px`;
+                suggestEl.style.width   = `${rect.width}px`;
+                suggestEl.style.display = "block";
+                suggestEl.innerHTML     = "";
+            }
+
+            function renderSuggestItems(input, items, onPick) {
+                for (const item of items) {
+                    const div = document.createElement("div");
+                    div.className = "sugg-item";
+
+                    const label = document.createElement("span");
+                    label.className   = item.cls || "tag-general";
+                    label.textContent = item.label;
+                    div.appendChild(label);
+
+                    if (item.count != null) {
+                        const count = document.createElement("span");
+                        count.className   = "sugg-count";
+                        count.textContent = item.count.toLocaleString();
+                        div.appendChild(count);
+                    }
+
+                    div.addEventListener("mousedown", e => {
+                        e.preventDefault();
+                        onPick(item.value);
+                        suggestEl.style.display = "none";
+                        input.focus();
+                    });
+                    suggestEl.appendChild(div);
+                }
+            }
+
+            // Replaces the last (partially-typed) token in the input with `value`.
+            function commitToken(input, raw, last, value) {
+                const tokens = raw.trim().split(/[\s,]+/);
+
+                tokens.pop();
+                tokens.push(value);
+                input.value = tokens.join(" ") + " ";
+            }
+
+            async function suggest(input) {
+                const raw  = input.value;
+                const last = raw.split(/[\s,]+/).pop().trim();
+
+                if (!last) {
+                    suggestEl.style.display = "none";
+                    return;
+                }
+
+                // Special-case the rating: metatag, but only once the colon has been
+                // typed. A bare "rating" should still fall through to the normal API
+                // search below (it has real tag-name matches like "rating_sensitive").
+                const ratingMatch = last.match(/^rating:(.*)$/i);
+                if (ratingMatch) {
+                    const partial = ratingMatch[1].toLowerCase();
+                    const matches = RATINGS.filter(r => r.startsWith(partial));
+
+                    if (!matches.length) { suggestEl.style.display = "none"; return; }
+
+                    positionSuggestBox(input);
+                    renderSuggestItems(
+                        input,
+                        matches.map(r => ({ label: `rating:${r}`, value: `rating:${r}`, cls: "tag-rating" })),
+                        value => commitToken(input, raw, last, value)
+                    );
+                    return;
+                }
+
+                const params = new URLSearchParams({
+                    "search[name_matches]": `${last}*`,
+                    "search[order]":        "count",
+                    limit:                  8,
+                });
+
+                try {
+                    const res  = await fetch(`${API}/tags.json?${params}`);
+                    if (!res.ok) { suggestEl.style.display = "none"; return; }
+                    const data = await res.json();
+
+                    if (!data.length) { suggestEl.style.display = "none"; return; }
+
+                    positionSuggestBox(input);
+                    renderSuggestItems(
+                        input,
+                        data.map(tag => ({
+                            label: tag.name,
+                            value: tag.name,
+                            cls:   CATEGORY_CLASS[tag.category] || "tag-general",
+                            count: tag.post_count,
+                        })),
+                        value => commitToken(input, raw, last, value)
+                    );
+                } catch {
+                    suggestEl.style.display = "none";
+                }
+            }
+
+            // ──────────────────────────────────────────────
+            // Settings persistence
+            // ──────────────────────────────────────────────
+
+            function saveSettings() {
+                localStorage.setItem("last_tags", tagsEl.value);
+                localStorage.setItem("last_blacklist", blackEl.value);
+            }
+
+            function loadSettings() {
+                const savedTags = localStorage.getItem("last_tags");
+                const savedBlacklist = localStorage.getItem("last_blacklist");
+
+                if (savedTags !== null) {
+                    tagsEl.value = savedTags;
+                }
+                if (savedBlacklist !== null) {
+                    blackEl.value = savedBlacklist;
+                }
+            }
+
+            loadSettings();
+
+            // If there are tags present, start the search automatically
+            if (tagsEl.value.trim()) {
+                startSearch();
+            }
+        </script>
+    </body>
 </html>

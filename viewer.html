@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Media Viewer</title>
+
+<style>
+    body {
+        margin: 0;
+        background: black;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+    }
+
+    img, video {
+        max-width: 100vw;
+        max-height: 100vh;
+        object-fit: contain;
+    }
+</style>
+</head>
+<body>
+
+<div id="container"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<script>
+const container = document.getElementById("container");
+
+const params = new URLSearchParams(window.location.search);
+const src = params.get("src");
+
+if (!src) {
+    container.innerHTML = "No media provided";
+    throw new Error("Missing src");
+}
+
+// ----------- helpers -----------
+
+function getExt(url) {
+    return url.split("?")[0].split(".").pop().toLowerCase();
+}
+
+const ext = getExt(src);
+
+// ----------- FULLSCREEN TOGGLE -----------
+
+document.body.addEventListener("dblclick", () => {
+    if (!document.fullscreenElement) {
+        document.body.requestFullscreen();
+    } else {
+        document.exitFullscreen();
+    }
+});
+
+// ----------- VIDEO -----------
+
+function playVideo(url) {
+    const video = document.createElement("video");
+
+    video.src = url;
+    video.loop = true;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.controls = true;
+
+    video.addEventListener("click", () => {
+        video.paused ? video.play() : video.pause();
+    });
+
+    container.innerHTML = "";
+    container.appendChild(video);
+}
+
+// ----------- IMAGE -----------
+
+function showImage(url) {
+    const img = document.createElement("img");
+    img.src = url;
+
+    container.innerHTML = "";
+    container.appendChild(img);
+}
+
+// ----------- ZIP ANIMATION -----------
+
+async function playZip(url) {
+    const res = await fetch(url);
+    const blob = await res.blob();
+
+    const zip = await JSZip.loadAsync(blob);
+
+    // IMPORTANT: use animation.json (not meta.json)
+    const animFile = zip.file("animation.json");
+
+    if (!animFile) {
+        container.innerHTML = "❌ Missing animation.json";
+        return;
+    }
+
+    const anim = JSON.parse(await animFile.async("string"));
+
+    const frames = anim.frames;
+
+    if (!frames || frames.length === 0) {
+        container.innerHTML = "❌ No frames found in animation.json";
+        return;
+    }
+
+    const loaded = [];
+
+    for (const f of frames) {
+        const file = zip.file(f.file);
+
+        if (!file) {
+            console.warn("Missing frame:", f.file);
+            continue;
+        }
+
+        const blob = await file.async("blob");
+        const url = URL.createObjectURL(blob);
+
+        const img = new Image();
+        img.src = url;
+
+        loaded.push({
+            img,
+            delay: f.delay ?? 100
+        });
+    }
+
+    if (loaded.length === 0) {
+        container.innerHTML = "❌ No valid frames loaded";
+        return;
+    }
+
+    let i = 0;
+
+    function loop() {
+        container.innerHTML = "";
+        container.appendChild(loaded[i].img);
+
+        const delay = loaded[i].delay;
+
+        i = (i + 1) % loaded.length;
+
+        setTimeout(loop, delay);
+    }
+
+    loop();
+}
+
+// ----------- ROUTER -----------
+
+(async function init() {
+    const videoExts = ["mp4", "webm"];
+    const imageExts = ["jpg", "jpeg", "png", "gif"];
+
+    if (videoExts.includes(ext)) {
+        playVideo(src);
+    }
+
+    else if (imageExts.includes(ext)) {
+        showImage(src);
+    }
+
+    else if (ext === "zip") {
+        await playZip(src);
+    }
+
+    else {
+        container.innerHTML = "❌ Unsupported format";
+    }
+})();
+</script>
+
+</body>
+</html>
