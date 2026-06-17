@@ -245,7 +245,7 @@
                     let mediaUrl = post.file_url;
 
 
-                    const clickUrl = `/viewer.html?src=${encodeURIComponent(mediaUrl)}&ext=${ext}`;
+                    const clickUrl = `viewer.html?src=${encodeURIComponent(mediaUrl)}&ext=${ext}`;
 
                     const isVideo = ["mp4", "webm"].includes(ext);
                     const isAnimated = ["mp4", "webm", "gif", "zip"].includes(ext);
