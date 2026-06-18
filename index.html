@@ -245,7 +245,7 @@
                     let mediaUrl = post.file_url;
 
 
-                    const clickUrl = `./viewer.html?src=${encodeURIComponent(mediaUrl)}&ext=${ext}`;
+                    let clickUrl = `./viewer.html?src=${encodeURIComponent(mediaUrl)}&ext=${ext}`;
 
                     if (ext === "zip" && post.large_file_url) {
                         clickUrl = post.large_file_url;
