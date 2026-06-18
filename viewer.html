@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Media Viewer</title>
 
+<link rel="stylesheet" href="styles.css">
+
 <style>
     body {
     margin: 0;
@@ -22,12 +24,17 @@
 }
 
 #tags {
-    background: #111;
-    color: white;
     padding: 12px;
+    background: #1b1c28;
+    border-top: 1px solid #3f4058;
+    line-height: 1.8;
     font-family: sans-serif;
-    line-height: 1.6;
-    border-top: 1px solid #333;
+}
+
+#tags span,
+#tags a {
+    display: inline-block;
+    margin-right: 8px;
 }
 
 .tag {
@@ -49,9 +56,7 @@
 
 <div id="container"></div>
 
-<div id="tags">
-    Loading tags...
-</div>
+<div id="tags"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
@@ -184,6 +189,7 @@ async function playZip(url) {
 }
 
 // ----------- TAGS -----------
+
 async function loadTags() {
     if (!postId) return;
 
@@ -196,13 +202,30 @@ async function loadTags() {
 
         const post = await res.json();
 
+        const sections = [
+            ["tag-artist", post.tag_string_artist],
+            ["tag-character", post.tag_string_character],
+            ["tag-copyright", post.tag_string_copyright],
+            ["tag-general", post.tag_string_general],
+            ["tag-meta", post.tag_string_meta]
+        ];
+
         const tagsEl = document.getElementById("tags");
+        tagsEl.innerHTML = "";
 
-        tagsEl.innerHTML = post.tag_string
-            .split(" ")
-            .map(tag => `<span class="tag">${tag}</span>`)
-            .join(" ");
+        for (const [cls, tagString] of sections) {
+            if (!tagString) continue;
 
+            for (const tag of tagString.split(" ")) {
+                const a = document.createElement("a");
+                a.className = cls;
+                a.textContent = tag;
+                a.href = `index.html?tags=${encodeURIComponent(tag)}`;
+                a.style.marginRight = "8px";
+
+                tagsEl.appendChild(a);
+            }
+        }
     } catch (err) {
         console.error(err);
     }
