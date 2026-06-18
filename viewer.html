@@ -218,7 +218,7 @@ async function loadTags() {
 
             for (const tag of tagString.split(" ")) {
                 const a = document.createElement("a");
-                a.className = cls;
+                a.className = cls + " tag";
                 a.textContent = tag;
                 a.href = `index.html?tags=${encodeURIComponent(tag)}`;
                 a.style.marginRight = "8px";
