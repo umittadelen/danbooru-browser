@@ -493,7 +493,7 @@
             }
 
             // ──────────────────────────────────────────────
-            // Settings persistence
+            // Settings persistence & URL Handling
             // ──────────────────────────────────────────────
 
             function saveSettings() {
@@ -513,9 +513,41 @@
                 }
             }
 
-            loadSettings();
+            function handleUrlParams() {
+                const params = new URLSearchParams(window.location.search);
 
-            // If there are tags present, start the search automatically
+                const add = params.get('addtag'); 
+                const rem = params.get('remtag');
+
+                if (!add && !rem) return;
+
+                let currentTags = parseTags(tagsEl.value);
+
+                if (add) {
+                    const tagsToAdd = parseTags(add);
+                    tagsToAdd.forEach(tag => {
+                        if (!currentTags.includes(tag)) {
+                            currentTags.push(tag);
+                        }
+                    });
+                }
+
+                if (rem) {
+                    const tagsToRem = parseTags(rem);
+                    currentTags = currentTags.filter(tag => !tagsToRem.includes(tag));
+                }
+
+                tagsEl.value = currentTags.join(" ");
+
+                saveSettings();
+
+                const cleanUrl = window.location.pathname + window.location.hash;
+                window.history.replaceState({}, document.title, cleanUrl);
+            }
+
+            loadSettings();
+            handleUrlParams();
+            
             if (tagsEl.value.trim()) {
                 startSearch();
             }
