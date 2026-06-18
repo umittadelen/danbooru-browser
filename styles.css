@@ -44,6 +44,18 @@ input:focus {
     box-shadow: 0 0 0 2px #002c66; /* blue-8 */
 }
 
+select {
+    background: #2c2d3f;
+    border: 1px solid #3f4058;
+    color: #e8e8ec;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 16px;
+    outline: none;
+    transition: 0.15s;
+    font-family: inherit;
+}
+
 #tags {
     flex: 4;
     min-width: 0;

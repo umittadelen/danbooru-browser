@@ -12,6 +12,11 @@
             <input id="tags" placeholder="tags (comma or space separated)" autocomplete="off" autocapitalize="none">
             <input id="blacklist" placeholder="blacklist tags" autocomplete="off" autocapitalize="none"
                 value="rating:explicit rating:questionable rating:sensitive">
+            <select id="sort-order">
+                <option value="">Newest</option>
+                <option value="order:score">Top Scored</option>
+                <option value="order:rank">Popular (Rank)</option>
+            </select>
             <span id="status-note"></span>
             <button id="search-btn">Search</button>
         </header>
@@ -203,10 +208,13 @@
             }
 
             async function fetchPosts(rawTags, rawBlacklist, afterId) {
-                const tags      = parseTags(rawTags);
+                const sortOrder = document.getElementById("sort-order").value;
+                const tags = parseTags(rawTags);
                 const blacklist = new Set(parseTags(rawBlacklist));
 
                 if (!tags.length) return { posts: [], restricted: 0 };
+
+                if (sortOrder) tags.push(sortOrder);
 
                 const ratingTags = tags.filter(t => t.startsWith("rating:"));
                 const normalTags = tags.filter(t => !t.startsWith("rating:"));
