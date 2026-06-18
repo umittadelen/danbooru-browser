@@ -522,6 +522,7 @@
                 if (!add && !rem) return;
 
                 let currentTags = parseTags(tagsEl.value);
+                let currentBlacklist = parseTags(blackEl.value);
 
                 if (add) {
                     const tagsToAdd = parseTags(add);
@@ -534,10 +535,20 @@
 
                 if (rem) {
                     const tagsToRem = parseTags(rem);
-                    currentTags = currentTags.filter(tag => !tagsToRem.includes(tag));
+                    
+                    tagsToRem.forEach(tag => {
+                        if (currentTags.includes(tag)) {
+                            currentTags = currentTags.filter(t => t !== tag);
+                        } else {
+                            if (!currentBlacklist.includes(tag)) {
+                                currentBlacklist.push(tag);
+                            }
+                        }
+                    });
                 }
 
                 tagsEl.value = currentTags.join(" ");
+                blackEl.value = currentBlacklist.join(" ");
 
                 saveSettings();
 
