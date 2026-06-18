@@ -244,12 +244,11 @@
                     
                     let mediaUrl = post.file_url;
 
+                    if (ext === "zip" && post.large_file_url) {
+                        mediaUrl = post.large_file_url;
+                    }
 
                     let clickUrl = `./viewer.html?id=${post.id}&src=${encodeURIComponent(mediaUrl)}&ext=${ext}`;
-
-                    if (ext === "zip" && post.large_file_url) {
-                        clickUrl = post.large_file_url;
-                    }
 
                     const isVideo = ["mp4", "webm"].includes(ext);
                     const isAnimated = ["mp4", "webm", "gif", "zip"].includes(ext);
