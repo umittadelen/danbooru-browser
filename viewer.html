@@ -42,7 +42,8 @@
     margin: 2px;
     padding: 4px 8px;
     border-radius: 4px;
-    background: #222;
+    background: transparent;
+    border: #5d8fff 1px solid;
 }
 
     img, video {
@@ -220,7 +221,7 @@ async function loadTags() {
                 const a = document.createElement("a");
                 a.className = cls + " tag";
                 a.textContent = tag;
-                a.href = `index.html?tags=${encodeURIComponent(tag)}`;
+                a.href = `index.html?tag=${encodeURIComponent(tag)}`;
                 a.style.marginRight = "8px";
 
                 tagsEl.appendChild(a);
