@@ -527,19 +527,28 @@
                 if (add) {
                     const tagsToAdd = parseTags(add);
                     tagsToAdd.forEach(tag => {
-                        if (!currentTags.includes(tag)) {
-                            currentTags.push(tag);
+                        // Is it in the blacklist
+                        if (currentBlacklist.includes(tag)) {
+                            // If yes, remove from blacklist and STOP
+                            currentBlacklist = currentBlacklist.filter(t => t !== tag);
+                        } 
+                        else {
+                            // If no, add to tags list if not already there
+                            if (!currentTags.includes(tag)) {
+                                currentTags.push(tag);
+                            }
                         }
                     });
                 }
 
                 if (rem) {
                     const tagsToRem = parseTags(rem);
-                    
                     tagsToRem.forEach(tag => {
                         if (currentTags.includes(tag)) {
+                            // If in search, remove it
                             currentTags = currentTags.filter(t => t !== tag);
                         } else {
+                            // If not in search, add to blacklist
                             if (!currentBlacklist.includes(tag)) {
                                 currentBlacklist.push(tag);
                             }
@@ -551,7 +560,6 @@
                 blackEl.value = currentBlacklist.join(" ");
 
                 saveSettings();
-
                 const cleanUrl = window.location.pathname + window.location.hash;
                 window.history.replaceState({}, document.title, cleanUrl);
             }
